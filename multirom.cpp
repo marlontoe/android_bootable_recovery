@@ -1164,6 +1164,10 @@ bool MultiROM::injectBoot(std::string img_path, bool only_if_older)
 	}
 	system("rm -r /tmp/boot");
 
+#ifdef MR_RECOVERY_IN_BOOTIMG
+	system("bbootimg -u /tmp/newboot.img -c name=mrom$(cat /tmp/multirom/recovery_ver)");
+#endif
+
 	if(img_path == m_boot_dev)
 		system_args("dd bs=4096 if=/tmp/newboot.img of=\"%s\"", m_boot_dev.c_str());
 	else
