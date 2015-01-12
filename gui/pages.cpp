@@ -60,6 +60,9 @@ PageSet* PageManager::mBaseSet = NULL;
 MouseCursor *PageManager::mMouseCursor = NULL;
 HardwareKeyboard *PageManager::mHardwareKeyboard = NULL;
 
+int tw_x_offset = 0;
+int tw_y_offset = 0;
+
 // Helper routine to convert a string to a color declaration
 int ConvertStrToColor(std::string str, COLOR* color)
 {
@@ -115,6 +118,7 @@ bool LoadPlacement(xml_node<>* node, int* x, int* y, int* w /* = NULL */, int* h
 		value = node->first_attribute("x")->value();
 		DataManager::GetValue(value, value);
 		*x = atol(value.c_str());
+		*x += tw_x_offset;
 	}
 
 	if (node->first_attribute("y"))
@@ -122,6 +126,7 @@ bool LoadPlacement(xml_node<>* node, int* x, int* y, int* w /* = NULL */, int* h
 		value = node->first_attribute("y")->value();
 		DataManager::GetValue(value, value);
 		*y = atol(value.c_str());
+		*y += tw_y_offset;
 	}
 
 	if (w && node->first_attribute("w"))
@@ -557,11 +562,16 @@ PageSet::~PageSet()
 {
 	for (std::vector<Page*>::iterator itr = mPages.begin(); itr != mPages.end(); ++itr)
 		delete *itr;
-	for (std::vector<xml_node<>*>::iterator itr2 = templates.begin(); itr2 != templates.end(); ++itr2)
-		delete *itr2;
 
 	delete mResources;
 	free(mXmlFile);
+
+	mDoc.clear();
+
+	for (std::vector<xml_document<>*>::iterator itr = mIncludedDocs.begin(); itr != mIncludedDocs.end(); ++itr) {
+		(*itr)->clear();
+		delete *itr;
+	}
 }
 
 int PageSet::Load(ZipArchive* package)
@@ -605,7 +615,7 @@ int PageSet::Load(ZipArchive* package)
 			return -1;
 		}
 	}
-	
+
 	return CheckInclude(package, &mDoc);
 }
 
@@ -620,7 +630,7 @@ int PageSet::CheckInclude(ZipArchive* package, xml_document<> *parentDoc)
 	long len;
 	char* xmlFile = NULL;
 	string filename;
-	xml_document<> doc;
+	xml_document<> *doc = NULL;
 
 	par = parentDoc->first_node("recovery");
 	if (!par) {
@@ -664,6 +674,7 @@ int PageSet::CheckInclude(ZipArchive* package, xml_document<> *parentDoc)
 				return -1;
 
 			read(fd, xmlFile, len);
+			xmlFile[len] = 0;
 			close(fd);
 		} else {
 			filename += attr->value();
@@ -685,12 +696,17 @@ int PageSet::CheckInclude(ZipArchive* package, xml_document<> *parentDoc)
 				LOGERR("Unable to extract '%s'\n", filename.c_str());
 				return -1;
 			}
+			xmlFile[len] = 0;
 		}
-		doc.parse<0>(xmlFile);
 
-		parent = doc.first_node("recovery");
+		xmlFile[len] = '\0';
+
+		doc = new xml_document<>();
+		doc->parse<0>(xmlFile);
+
+		parent = doc->first_node("recovery");
 		if (!parent)
-			parent = doc.first_node("install");
+			parent = doc->first_node("install");
 
 		// Now, let's parse the XML
 		LOGINFO("Loading included resources...\n");
@@ -715,11 +731,17 @@ int PageSet::CheckInclude(ZipArchive* package, xml_document<> *parentDoc)
 			templates.push_back(xmltemplate);
 
 		child = parent->first_node("pages");
-		if (child)
-			if (LoadPages(child))
-				return -1;
+		if (child && LoadPages(child))
+		{
+			templates.pop_back();
+			doc->clear();
+			delete doc;
+			return -1;
+		}
 
-		if (CheckInclude(package, &doc))
+		mIncludedDocs.push_back(doc);
+
+		if (CheckInclude(package, doc))
 			return -1;
 
 		chld = chld->next_sibling("xmlfile");
@@ -794,6 +816,16 @@ int PageSet::LoadVariables(xml_node<>* vars)
 		persist = child->first_attribute("persist");
 		if(name && value)
 		{
+			if (strcmp(name->value(), "tw_x_offset") == 0) {
+				tw_x_offset = atoi(value->value());
+				child = child->next_sibling("variable");
+				continue;
+			}
+			if (strcmp(name->value(), "tw_y_offset") == 0) {
+				tw_y_offset = atoi(value->value());
+				child = child->next_sibling("variable");
+				continue;
+			}
 			p = persist ? atoi(persist->value()) : 0;
 			string temp = value->value();
 			string valstr = gui_parse_text(temp);
@@ -937,6 +969,8 @@ int PageManager::LoadPackage(std::string name, std::string package, std::string 
 	if (package.size() > 4 && package.substr(package.size() - 4) != ".zip")
 	{
 		LOGINFO("Load XML directly\n");
+		tw_x_offset = TW_X_OFFSET;
+		tw_y_offset = TW_Y_OFFSET;
 		// We can try to load the XML directly...
 		struct stat st;
 		if(stat(package.c_str(),&st) != 0)
@@ -957,6 +991,8 @@ int PageManager::LoadPackage(std::string name, std::string package, std::string 
 	else
 	{
 		LOGINFO("Loading zip theme\n");
+		tw_x_offset = 0;
+		tw_y_offset = 0;
 		if (!TWFunc::Path_Exists(package))
 			return -1;
 		if (sysMapFile(package.c_str(), &map) != 0) {
