@@ -82,6 +82,7 @@
 		<style name="console">
 			<color foreground="%console_foreground%" background="%console_background%" scroll="%console_scroll%" />
 			<font resource="fixed" />
+			<fastscroll linecolor="%fastscroll_linecolor%" rectcolor="%fastscroll_rectcolor%" w="%fastscroll_w%" linew="%fastscroll_linew%" rectw="%fastscroll_rectw%" recth="%fastscroll_recth%" />
 		</style>
 
 		<style name="input">
@@ -386,7 +387,7 @@
 			</object>
 
 			<object type="button">
-				<placement x="%col_center_x%" y="%row3_y%" />
+				<placement x="%col1_x%" y="%row3_y%" />
 				<text>Home</text>
 				<actions>
 					<action function="set">tw_clear_destination=main2</action>
@@ -3695,6 +3696,7 @@
 				<placement x="%col_center_x%" y="%row3_y%" />
 				<text>Do Not Install</text>
 				<image resource="main_button" />
+				<action function="set">tw_page_done=1</action>
 			</object>
 
 			<object type="slider">
