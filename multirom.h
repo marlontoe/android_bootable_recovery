@@ -101,6 +101,8 @@ struct base_folder
 	int size;
 };
 
+class EdifyHacker;
+
 class MultiROM
 {
 public:
@@ -189,10 +191,8 @@ private:
 	static void findPath();
 	static bool changeMounts(std::string base);
 	static void restoreMounts();
-	static bool prepareZIP(std::string& file, bool &has_block_update);
+	static bool prepareZIP(std::string& file, EdifyHacker *hacker, bool& restore_script);
 	static bool verifyZIP(const std::string& file, int &verify_status);
-	static bool skipLine(const char *line);
-	static void appendBraces(FILE *out, const char *line);
 	static std::string getNewRomName(std::string zip, std::string def);
 	static bool createDirs(std::string name, int type);
 	static bool compressRamdisk(const char *src, const char *dest, int cmpr);

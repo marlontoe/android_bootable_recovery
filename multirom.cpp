@@ -26,6 +26,7 @@
 #include "variables.h"
 #include "openrecoveryscript.hpp"
 #include "fuse_sideload.h"
+#include "multiromedify.h"
 
 extern "C" {
 #include "twcommon.h"
@@ -892,7 +893,8 @@ bool MultiROM::flashZip(std::string rom, std::string file)
 	int verify_status = 0;
 	int wipe_cache = 0;
 	int sideloaded = 0;
-	bool has_block_update = false;
+	bool restore_script = false;
+	EdifyHacker hacker;
 	std::string boot, sysimg, loop_device;
 	TWPartition *data, *sys;
 
@@ -903,7 +905,7 @@ bool MultiROM::flashZip(std::string rom, std::string file)
 		return false;
 
 	gui_print("Preparing ZIP file...\n");
-	if(!prepareZIP(file, has_block_update))  // may change file var
+	if(!prepareZIP(file, &hacker, restore_script))  // may change file var
 		return false;
 
 	if(!changeMounts(rom))
@@ -922,7 +924,7 @@ bool MultiROM::flashZip(std::string rom, std::string file)
 	if(!fakeBootPartition(boot.c_str()))
 		goto exit;
 
-	if(has_block_update)
+	if(hacker.getProcessFlags() & EDIFY_BLOCK_UPDATES)
 	{
 		gui_print("ZIP uses block updates\n");
 		if(!createFakeSystemImg())
@@ -933,6 +935,13 @@ bool MultiROM::flashZip(std::string rom, std::string file)
 	status = TWinstall_zip(file.c_str(), &wipe_cache);
 	DataManager::SetValue(TW_SIGNED_ZIP_VERIFY_VAR, verify_status);
 
+	if(restore_script && hacker.restoreState() && hacker.writeToFile("/tmp/"MR_UPDATE_SCRIPT_NAME))
+	{
+		gui_print("Restoring original updater-script\n");
+		if(system_args("cd /tmp && zip \"%s\" %s", file.c_str(), MR_UPDATE_SCRIPT_NAME) != 0)
+			LOGERR("Failed to restore original updater-script, THIS ZIP IS NOW UNUSEABLE FOR NON-MULTIROM FLASHING\n");
+	}
+
 	system("rm -r "MR_UPDATE_SCRIPT_PATH);
 	if(file == "/tmp/mr_update.zip")
 		system("rm /tmp/mr_update.zip");
@@ -942,11 +951,11 @@ bool MultiROM::flashZip(std::string rom, std::string file)
 	else
 		gui_print("ZIP successfully installed\n");
 
-	if(has_block_update)
+	if(hacker.getProcessFlags() & EDIFY_BLOCK_UPDATES)
 		system_args("busybox umount -d /tmpsystem");
 
 exit:
-	if(has_block_update)
+	if(hacker.getProcessFlags() & EDIFY_BLOCK_UPDATES)
 		failsafeCheckPartition("/tmp/mrom_fakesyspart");
 
 	restoreBootPartition();
@@ -962,7 +971,8 @@ exit:
 bool MultiROM::flashORSZip(std::string file, int *wipe_cache)
 {
 	int status, verify_status = 0;
-	bool has_block_update = false;
+	EdifyHacker hacker;
+	bool restore_script = false;
 
 	gui_print("Flashing ZIP file %s\n", file.c_str());
 
@@ -970,10 +980,10 @@ bool MultiROM::flashORSZip(std::string file, int *wipe_cache)
 		return false;
 
 	gui_print("Preparing ZIP file...\n");
-	if(!prepareZIP(file, has_block_update)) // may change file var
+	if(!prepareZIP(file, &hacker, restore_script)) // may change file var
 		return false;
 
-	if(has_block_update)
+	if(hacker.getProcessFlags() & EDIFY_BLOCK_UPDATES)
 	{
 		gui_print("ZIP uses block updates\n");
 		if(!createFakeSystemImg())
@@ -984,6 +994,13 @@ bool MultiROM::flashORSZip(std::string file, int *wipe_cache)
 	status = TWinstall_zip(file.c_str(), wipe_cache);
 	DataManager::SetValue(TW_SIGNED_ZIP_VERIFY_VAR, verify_status);
 
+	if(restore_script && hacker.restoreState() && hacker.writeToFile("/tmp/"MR_UPDATE_SCRIPT_NAME))
+	{
+		gui_print("Restoring original updater-script\n");
+		if(system_args("cd /tmp && zip \"%s\" %s", file.c_str(), MR_UPDATE_SCRIPT_NAME) != 0)
+			LOGERR("Failed to restore original updater-script, THIS ZIP IS NOW UNUSEABLE FOR NON-MULTIROM FLASHING\n");
+	}
+
 	system("rm -r "MR_UPDATE_SCRIPT_PATH);
 	if(file == "/tmp/mr_update.zip")
 		system("rm /tmp/mr_update.zip");
@@ -993,7 +1010,7 @@ bool MultiROM::flashORSZip(std::string file, int *wipe_cache)
 	else
 		gui_print("ZIP successfully installed\n");
 
-	if(has_block_update)
+	if(hacker.getProcessFlags() & EDIFY_BLOCK_UPDATES)
 	{
 		system_args("busybox umount -d /tmpsystem");
 		failsafeCheckPartition("/tmp/mrom_fakesyspart");
@@ -1023,115 +1040,7 @@ bool MultiROM::verifyZIP(const std::string& file, int &verify_status)
 	return true;
 }
 
-static char *strstr_wildcard(const char *s, const char *find)
-{
-	size_t i,x;
-
-	if(*s == 0 || *find == 0)
-		return NULL;
-
-	while(*s)
-	{
-		i = 0;
-		x = 0;
-		while(s[i])
-		{
-			if(find[x] == '?')
-			{
-				if(find[x+1] != s[i+1])
-				{
-					if(find[x+1] == s[i])
-						++x;
-					else
-						break;
-				}
-			}
-			else if(find[x] != s[i])
-				break;
-
-			++i;
-			++x;
-
-			if(find[x] == 0)
-				return ((char*)s);
-		}
-		++s;
-	}
-	return NULL;
-}
-
-// This needs to fucking go.
-bool MultiROM::skipLine(const char *line)
-{
-
-	if(strstr(line, "mount") && strstr(line, "ui_print"))
-		if (strstr(line, "mount") < strstr(line, "ui_print"))
-			return true;
-
-	if((strstr(line, "mount(") || strstr(line, "mount\"")) && !strstr(line, "ui_print"))
-	{
-		if (strstr(line, "run_program") ||
-			(!strstr_wildcard(line, "/system/?bin/?mount") && !strstr(line, "symlink(")))
-		{
-			return true;
-		}
-	}
-
-	if(strstr(line, "format"))
-		return true;
-
-	if (strstr(line, "boot.img") || strstr(line, m_boot_dev.c_str()) ||
-		strstr(line, "bbootimg") || strstr(line, "zImage"))
-	{
-		return false;
-	}
-
-	if(strstr(line, "/dev/block/"))
-		return true;
-
-	if(strstr(line, "\"dd\"") && strstr(line, "run_program"))
-		return true;
-
-	return false;
-}
-
-void MultiROM::appendBraces(FILE *out, const char *line)
-{
-	int counter = 0;
-	int tildas = 0;
-	for(; *line; ++line)
-	{
-		if(*line == '(')
-			++counter;
-		else if(*line == ')')
-		{
-			--counter;
-			tildas = 0;
-		}
-		else if(*line == ';')
-			++tildas;
-	}
-
-	char c = '(';
-	if(counter < 0)
-	{
-		c = ')';
-		counter *= -1;
-	}
-	else
-		tildas = 0;
-
-	for(int i = 0; i < counter; ++i)
-		fputc(c, out);
-
-	if(tildas)
-		fputc(';', out);
-
-	if(counter || tildas)
-		fputc('\n', out);
-}
-
-bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
+bool MultiROM::prepareZIP(std::string& file, EdifyHacker *hacker, bool& restore_script)
 {
 	bool res = false;
 
@@ -1139,10 +1048,8 @@ bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
 	int script_len;
 	char* script_data = NULL;
 	int itr = 0;
-	char *token, *p, *saveptr;
 	bool changed = false;
 
-	char cmd[512];
 	system("rm /tmp/mr_update.zip");
 
 	struct stat info;
@@ -1152,19 +1059,11 @@ bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
 		return false;
 	}
 
-	sprintf(cmd, "mkdir -p /tmp/%s", MR_UPDATE_SCRIPT_PATH);
-	system(cmd);
-
-	sprintf(cmd, "/tmp/%s", MR_UPDATE_SCRIPT_NAME);
-
-	FILE *new_script = fopen(cmd, "w");
-	if(!new_script)
-		return false;
+	system_args("mkdir -p /tmp/%s", MR_UPDATE_SCRIPT_PATH);
 
 	MemMapping map;
 	if (sysMapFile(file.c_str(), &map) != 0) {
 		LOGERR("Failed to sysMapFile '%s'\n", file.c_str());
-		fclose(new_script);
 		return false;
 	}
 
@@ -1191,60 +1090,24 @@ bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
 	mzCloseZipArchive(&zip);
 	sysReleaseMap(&map);
 
-	token = strtok_r(script_data, "\n", &saveptr);
-	while(token)
+	if(!hacker->loadBuffer(script_data, script_len))
 	{
-		for(p = token; isspace(*p); ++p);
-
-		if(*p == 0 || *p == '#' || !skipLine(p))
-		{
-			fputs(token, new_script);
-			fputc('\n', new_script);
-		}
-		else
-		{
-			changed = true;
-
-			appendBraces(new_script, p);
-
-			if (strstr(p, "format(") == p && strstr(p, "/system"))
-			{
-				fputs("run_program(\"/sbin/sh\", \"-c\", \"grep -q '/system' /etc/mtab || mount /system\");\n", new_script);
-				fputs("run_program(\"/sbin/sh\", \"-c\", \"chattr -R -i /system/*\");\n", new_script);
-				fputs("run_program(\"/sbin/sh\", \"-c\", \"rm -rf /system/*\");\n", new_script);
-			}
-			else if(strstr(p, "block_image_update(") == p)
-			{
-				has_block_update = true;
-
-				fputs(token, new_script);
-				fputc('\n', new_script);
-
-				TWPartition *sys = PartitionManager.Find_Original_Partition_By_Path("/system");
-				if(sys)
-				{
-					fprintf(new_script, "run_program(\"/sbin/sh\", \"-c\", \""
-						"mkdir -p /tmpsystem && mount -t ext4 $(readlink -f -n %s) /tmpsystem && "
-						"(chattr -R -i /system/* || true) && (rm -rf /system/* || true) && "
-						"(cp -a /tmpsystem/* /system/ || true) && cp_xattrs /tmpsystem /system"
-						"\");\n",
-							sys->Actual_Block_Device.c_str());
-				}
-			}
-			else
-			{
-				// Add dummy line, because ifs need to have something in them
-				fprintf(new_script, "ui_print(\"\"); # orig: \"%s\" - removed by multirom\n", p);
-			}
-		}
-		token = strtok_r(NULL, "\n", &saveptr);
+		gui_print("Failed to process updater-script!\n");
+		goto exit;
 	}
 
 	free(script_data);
 	script_data = NULL;
-	fclose(new_script);
 
-	if(has_block_update)
+	hacker->saveState();
+	hacker->replaceOffendings();
+
+	if(!hacker->writeToFile("/tmp/"MR_UPDATE_SCRIPT_NAME))
+		goto exit;
+
+	hacker->writeToFile("/tmp/mrom_last_updater_script");
+
+	if(hacker->getProcessFlags() & EDIFY_BLOCK_UPDATES)
 	{
 		TWPartition *data = PartitionManager.Find_Original_Partition_By_Path("/data");
 		if(data && info.st_size*2.25 > data->GetSizeFree())
@@ -1254,9 +1117,17 @@ bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
 		}
 	}
 
-	if(changed)
+	if(hacker->getProcessFlags() & EDIFY_CHANGED)
 	{
-		if(info.st_size < 450*1024*1024)
+		int64_t max_tmp_size = TWFunc::getFreeSpace("/tmp");
+		if(max_tmp_size < 0)
+			max_tmp_size = 450*1024*1024;
+		else
+			max_tmp_size *= 0.45;
+
+		LOGINFO("ZIP size limit for /tmp: %.2f MB\n", double(max_tmp_size)/1024/1024);
+
+		if(info.st_size < max_tmp_size)
 		{
 			gui_print("Copying ZIP to /tmp...\n");
 			system_args("cp \"%s\" /tmp/mr_update.zip", file.c_str());
@@ -1271,16 +1142,11 @@ bool MultiROM::prepareZIP(std::string& file, bool &has_block_update)
 		}
 		else
 		{
-			gui_print(" \n");
-			gui_print("=================================\n");
-			LOGERR("WARN: Modifying the real ZIP, it is too big!\n");
-			LOGERR("The ZIP file is now unusable for non-MultiROM flashing!\n");
-			gui_print("=================================\n");
-			gui_print(" \n");
+			LOGINFO("Modifying ZIP %s in place, gonna restore it later\n", file.c_str());
+			restore_script = true;
 		}
 
-		sprintf(cmd, "cd /tmp && zip \"%s\" %s", file.c_str(), MR_UPDATE_SCRIPT_NAME);
-		if(system(cmd) != 0)
+		if(system_args("cd /tmp && zip \"%s\" %s", file.c_str(), MR_UPDATE_SCRIPT_NAME) != 0)
 		{
 			system("rm /tmp/mr_update.zip");
 			return false;
@@ -1295,7 +1161,6 @@ exit:
 	free(script_data);
 	mzCloseZipArchive(&zip);
 	sysReleaseMap(&map);
-	fclose(new_script);
 	return false;
 }
 
@@ -2517,6 +2382,7 @@ bool MultiROM::sailfishProcessBoot(const std::string& root)
 	int rd_cmpr;
 	struct bootimg img;
 	bool res = false;
+	int ret;
 
 	gui_print("Processing boot.img for SailfishOS\n");
 	system("rm /tmp/boot.img");
@@ -2540,9 +2406,15 @@ bool MultiROM::sailfishProcessBoot(const std::string& root)
 		goto fail_inject;
 	}
 
+	ret = libbootimg_dump_dtb(&img, "/tmp/boot/dtb.img");
+	if(ret < 0 && ret != LIBBOOTIMG_ERROR_NO_BLOB_DATA)
+		gui_print("Failed to extract dtb.img from boot.img!\n");
+	else if(ret >= 0)
+		system_args("cp /tmp/boot/dtb.img \"%s/dtb.img\"", root.c_str());
+
 	// DEPLOY
-	system_args("cp /tmp/boot/initrd.img %s/initrd.img", root.c_str());
-	system_args("cp /tmp/boot/zImage %s/zImage", root.c_str());
+	system_args("cp /tmp/boot/initrd.img \"%s/initrd.img\"", root.c_str());
+	system_args("cp /tmp/boot/zImage \"%s/zImage\"", root.c_str());
 
 	res = true;
 fail_inject:
