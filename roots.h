@@ -23,12 +23,6 @@
 extern "C" {
 #endif
 
-struct Volume
-{
-    char fs_type[8];
-    char blk_device[256];
-};
-
 // Load and parse volume data from /etc/recovery.fstab.
 void load_volume_table();
 
