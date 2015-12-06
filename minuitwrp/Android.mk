@@ -62,6 +62,9 @@ ifeq ($(TWRP_EVENT_LOGGING), true)
 LOCAL_CFLAGS += -D_EVENT_LOGGING
 endif
 
+ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),RGBA_8888)
+  LOCAL_CFLAGS += -DRECOVERY_RGBA
+endif
 ifeq ($(subst ",,$(TARGET_RECOVERY_PIXEL_FORMAT)),RGBX_8888)
   LOCAL_CFLAGS += -DRECOVERY_RGBX
 endif
@@ -157,7 +160,7 @@ ifneq ($(TW_THEME_LANDSCAPE),)
   LOCAL_CFLAGS += -DTW_HAS_LANDSCAPE
 endif
 
-LOCAL_SHARED_LIBRARIES += libz libc libcutils libjpeg libpng
+LOCAL_SHARED_LIBRARIES += libz libc libcutils libjpeg libpng libutils
 LOCAL_STATIC_LIBRARIES += libpixelflinger_static
 LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE := libminuitwrp
